@@ -13,27 +13,47 @@ datasource db {
 }
 
 model User {
-  id        String      @id @default(uuid())
-  username  String    @unique
-  password  String    @db.VarChar(255)
-  createdAt DateTime  @default(now())
-  messages  Message[]
+  id           String       @id @default(uuid())
+  username     String       @unique
+  password     String       @db.VarChar(255)
+  createdAt    DateTime     @default(now())
+  messages     Message[]
+  rooms        RoomMember[]
+  createdRooms Room[]       @relation("RoomCreator")
 }
 
 model Room {
-  id       Int       @id @default(autoincrement())
-  name     String    @unique
-  messages Message[]
+  id          String       @id @default(uuid())
+  name        String       @unique
+  createdAt   DateTime     @default(now())
+  createdBy   User?        @relation("RoomCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdById String?
+  messages    Message[]
+  members     RoomMember[]
+
+  @@index([createdById])
 }
 
 model Message {
-  id        Int      @id @default(autoincrement())
+  id        String   @id @default(uuid())
   content   String
   createdAt DateTime @default(now())
-  sender    User     @relation(fields: [senderId], references: [id])
+  sender    User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
   senderId  String
-  room      Room     @relation(fields: [roomId], references: [id])
-  roomId    Int
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomId    String
 
   @@index([roomId, createdAt])
+  @@index([senderId])
+}
+
+model RoomMember {
+  userId   String
+  roomId   String
+  joinedAt DateTime @default(now())
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  room     Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roomId])
+  @@index([roomId])
 }
