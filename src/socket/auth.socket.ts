@@ -6,72 +6,85 @@ import jwt, { SignOptions } from "jsonwebtoken";
 import { envConfig } from "../config/env";
 import { setAuthUser } from "./auth";
 
+interface AuthResponse {
+  status: number;
+  message: string;
+  data?: string;
+}
+
+type Ack = (response: AuthResponse) => void;
+
 export const authSocket = (io: Server, socket: Socket) => {
-  socket.on("register", async (userData: UserLoginRegiser) => {
-    if (userData) {
-      const existingUser = await prisma.user.findFirst({
-        where: {
-          username: userData?.username,
-        },
-      });
-      if (existingUser) {
-        return socket.emit("response", {
+  socket.on("register", async (userData: UserLoginRegiser, ack?: Ack) => {
+    if (typeof ack !== "function") return;
+
+    try {
+      if (!userData?.username || !userData?.password) {
+        return ack({
           status: 400,
-          message: "A user already exist with that username.",
+          message: "Please provide username and password.",
         });
       }
+
+      const existingUser = await prisma.user.findUnique({
+        where: { username: userData.username },
+      });
+      if (existingUser) {
+        return ack({
+          status: 400,
+          message: "A user already exists with that username.",
+        });
+      }
+
       await prisma.user.create({
         data: {
-          username: userData?.username,
-          password: await bcrypt.hash(userData?.password, 10),
+          username: userData.username,
+          password: await bcrypt.hash(userData.password, 10),
         },
       });
 
-      socket.emit("response", {
-        status: 200,
-        message: "User registered successfully",
-      });
-    } else {
-      return socket.emit("response", {
-        message: "Please provide all the details.",
+      return ack({ status: 200, message: "User registered successfully" });
+    } catch (error) {
+      console.error("register error:", error);
+      return ack({
+        status: 500,
+        message: "Something went wrong. Please try again.",
       });
     }
   });
 
-  socket.on("login", async (userData: UserLoginRegiser) => {
-    if (userData) {
-      const user = await prisma.user.findFirst({
-        where: {
-          username: userData?.username,
-        },
-      });
+  socket.on("login", async (userData: UserLoginRegiser, ack?: Ack) => {
+    if (typeof ack !== "function") return;
 
-      if (!user) {
-        return socket.emit("response", {
+    try {
+      if (!userData?.username || !userData?.password) {
+        return ack({
           status: 400,
-          message: "User not found.",
+          message: "Please provide username and password.",
         });
       }
 
+      const user = await prisma.user.findUnique({
+        where: { username: userData.username },
+      });
+
+      if (!user) {
+        return ack({ status: 400, message: "Invalid username or password." });
+      }
+
       const isPasswordValid = await bcrypt.compare(
-        userData?.password,
+        userData.password,
         user.password,
       );
       if (!isPasswordValid) {
-        return socket.emit("response", {
-          status: 400,
-          message: "Invalid password.",
-        });
+        return ack({ status: 400, message: "Invalid username or password." });
       }
 
       const jwtSecret = envConfig.jwtSecret;
       const accessTokenExpire = envConfig.accessTokenExpire;
 
       if (!jwtSecret || !accessTokenExpire) {
-        return socket.emit("response", {
-          status: 500,
-          message: "JWT configuration is missing.",
-        });
+        return ack({ status: 500, message: "JWT configuration is missing." });
       }
 
       const token = jwt.sign({ id: user.id }, jwtSecret, {
@@ -82,14 +95,16 @@ export const authSocket = (io: Server, socket: Socket) => {
       // (without requiring a reconnect carrying the token).
       setAuthUser(socket, { id: user.id });
 
-      return socket.emit("response", {
+      return ack({
         status: 200,
         message: "User logged in successfully.",
         data: token,
       });
-    } else {
-      return socket.emit("response", {
-        message: "Please provide all the details.",
+    } catch (error) {
+      console.error("login error:", error);
+      return ack({
+        status: 500,
+        message: "Something went wrong. Please try again.",
       });
     }
   });
