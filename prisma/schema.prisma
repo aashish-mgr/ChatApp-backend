@@ -13,8 +13,9 @@ datasource db {
 }
 
 model User {
-  id        Int       @id @default(autoincrement())
+  id        String      @id @default(uuid())
   username  String    @unique
+  password  String    @db.VarChar(255)
   createdAt DateTime  @default(now())
   messages  Message[]
 }
@@ -29,9 +30,8 @@ model Message {
   id        Int      @id @default(autoincrement())
   content   String
   createdAt DateTime @default(now())
-
   sender    User     @relation(fields: [senderId], references: [id])
-  senderId  Int
+  senderId  String
   room      Room     @relation(fields: [roomId], references: [id])
   roomId    Int
 
