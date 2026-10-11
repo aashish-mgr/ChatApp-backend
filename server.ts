@@ -2,7 +2,7 @@ import app from "./src/app";
 import { envConfig } from "./src/config/env";
 import { connectToDatabase } from "./src/config/prisma";
 import { Server } from "socket.io";
-import AuthController from "./src/modules/Auth/controller";
+import {initializeSocket }from "./src/socket";
 
 const startServer = async () => {
   await connectToDatabase();
@@ -11,7 +11,7 @@ const startServer = async () => {
   });
 
   const io = new Server(server);
-  AuthController.initialize(io);
+  initializeSocket(io);
 };
 
 startServer();
