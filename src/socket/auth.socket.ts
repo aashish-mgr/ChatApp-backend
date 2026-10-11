@@ -4,6 +4,7 @@ import { prisma } from "../config/prisma";
 import bcrypt from "bcrypt";
 import jwt, { SignOptions } from "jsonwebtoken";
 import { envConfig } from "../config/env";
+import { setAuthUser } from "./auth";
 
 export const authSocket = (io: Server, socket: Socket) => {
   socket.on("register", async (userData: UserLoginRegiser) => {
@@ -76,6 +77,11 @@ export const authSocket = (io: Server, socket: Socket) => {
       const token = jwt.sign({ id: user.id }, jwtSecret, {
         expiresIn: accessTokenExpire as NonNullable<SignOptions["expiresIn"]>,
       });
+
+      // Authenticate this socket so protected events can run on it right away
+      // (without requiring a reconnect carrying the token).
+      setAuthUser(socket, { id: user.id });
+
       return socket.emit("response", {
         status: 200,
         message: "User logged in successfully.",
