@@ -1,6 +1,6 @@
 import type { ExtendedError, Socket } from "socket.io";
-import { decodeToken, extractToken } from "./token.util";
-import { setAuthUser } from "./socket-user.util";
+import { decodeToken, extractToken } from "../modules/auth/token.util";
+import { setAuthUser } from "../modules/auth/socket-user.util";
 
 /**
  * Handshake middleware: decode `auth.token` (if present) and attach the user.

@@ -2,7 +2,7 @@ import app from "./src/app";
 import { envConfig } from "./src/config/env";
 import { connectToDatabase } from "./src/config/prisma";
 import { Server } from "socket.io";
-import {initializeSocket }from "./src/socket";
+import { initializeSocket } from "./src/socket";
 
 const startServer = async () => {
   await connectToDatabase();

@@ -1,5 +1,5 @@
 import type { Socket } from "socket.io";
-import { getAuthUser } from "./socket-user.util";
+import { getAuthUser } from "../modules/auth/socket-user.util";
 
 type SocketEventHandler = (...args: any[]) => void | Promise<void>;
 

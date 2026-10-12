@@ -1,7 +1,7 @@
-import { prisma } from "../config/prisma";
+import { prisma } from "../../config/prisma";
 import { Server, Socket } from "socket.io";
-import { getAuthUser, getUserRoom, requireAuth } from "./auth";
-import { handleError } from "../utils/errorHandler";
+import { getAuthUser, getUserRoom } from "../auth";
+import { handleError, requireAuth } from "../../middleware";
 
 const createRoomName = (userA: string, userB: string) => {
   return [userA, userB].sort().join(":");

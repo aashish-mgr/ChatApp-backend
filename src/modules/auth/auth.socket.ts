@@ -1,10 +1,10 @@
 import { Socket, Server } from "socket.io";
-import { UserLoginRegiser } from "./types";
-import { prisma } from "../config/prisma";
+import { UserLoginRegister } from "./auth.types";
+import { prisma } from "../../config/prisma";
 import bcrypt from "bcrypt";
 import jwt, { SignOptions } from "jsonwebtoken";
-import { envConfig } from "../config/env";
-import { setAuthUser, getUserRoom } from "./auth";
+import { envConfig } from "../../config/env";
+import { setAuthUser, getUserRoom } from "./socket-user.util";
 
 interface AuthResponse {
   status: number;
@@ -15,7 +15,7 @@ interface AuthResponse {
 type Ack = (response: AuthResponse) => void;
 
 export const authSocket = (io: Server, socket: Socket) => {
-  socket.on("register", async (userData: UserLoginRegiser, ack?: Ack) => {
+  socket.on("register", async (userData: UserLoginRegister, ack?: Ack) => {
     if (typeof ack !== "function") return;
 
     try {
@@ -53,7 +53,7 @@ export const authSocket = (io: Server, socket: Socket) => {
     }
   });
 
-  socket.on("login", async (userData: UserLoginRegiser, ack?: Ack) => {
+  socket.on("login", async (userData: UserLoginRegister, ack?: Ack) => {
     if (typeof ack !== "function") return;
 
     try {

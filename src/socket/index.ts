@@ -1,7 +1,7 @@
-import { Server, Socket } from "socket.io";
-import {authSocket} from "./auth.socket";
-import { attachUser, getAuthUser, getUserRoom } from "./auth";
-import { messageSocket } from "./message.socket";
+import { Server } from "socket.io";
+import { authSocket, getAuthUser, getUserRoom } from "../modules/auth";
+import { attachUser } from "../middleware";
+import { messageSocket } from "../modules/message";
 
 export const initializeSocket = (io: Server) => {
   // Decode `auth.token` (if present) once per connection and attach the user to
