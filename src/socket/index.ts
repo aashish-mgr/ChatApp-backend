@@ -1,6 +1,7 @@
 import { Server, Socket } from "socket.io";
 import {authSocket} from "./auth.socket";
 import { attachUser } from "./auth";
+import { messageSocket } from "./message.socket";
 
 export const initializeSocket = (io: Server) => {
   // Decode `auth.token` (if present) once per connection and attach the user to
@@ -13,5 +14,6 @@ export const initializeSocket = (io: Server) => {
 
 
     authSocket(io, socket);
+    messageSocket(io, socket);
   });
 };
