@@ -10,6 +10,7 @@ interface AuthResponse {
   status: number;
   message: string;
   data?: string;
+  user?: { id: string; username: string };
 }
 
 type Ack = (response: AuthResponse) => void;
@@ -100,6 +101,7 @@ export const authSocket = (io: Server, socket: Socket) => {
         status: 200,
         message: "User logged in successfully.",
         data: token,
+        user: { id: user.id, username: user.username },
       });
     } catch (error) {
       console.error("login error:", error);

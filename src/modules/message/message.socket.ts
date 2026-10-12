@@ -107,6 +107,48 @@ export const messageSocket = (io: Server, socket: Socket) => {
   );
 
   socket.on(
+    "room:list",
+    requireAuth(
+      handleError(async (ack?: (result: Object) => void) => {
+        const userId = getAuthUser(socket)!.id;
+
+        const rooms = await prisma.room.findMany({
+          where: { members: { some: { userId: userId } } },
+          include: {
+            members: {
+              include: { user: { select: { id: true, username: true } } },
+            },
+            messages: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              include: { sender: { select: { id: true, username: true } } },
+            },
+          },
+        });
+
+        const roomsWithMeta = rooms
+          .map((room) => ({
+            id: room.id,
+            createdAt: room.createdAt,
+            members: room.members.map((member) => member.user),
+            lastMessage: room.messages[0] ?? null,
+          }))
+          .sort((a, b) => {
+            const aTime = a.lastMessage?.createdAt ?? a.createdAt;
+            const bTime = b.lastMessage?.createdAt ?? b.createdAt;
+            return bTime.getTime() - aTime.getTime();
+          });
+
+        return ack?.({
+          status: 200,
+          message: "Rooms fetched successfully.",
+          rooms: roomsWithMeta,
+        });
+      }),
+    ),
+  );
+
+  socket.on(
     "message:history",
     requireAuth(
       handleError(
