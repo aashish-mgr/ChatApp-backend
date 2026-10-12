@@ -1,6 +1,6 @@
 import { prisma } from "../config/prisma";
 import { Server, Socket } from "socket.io";
-import { requireAuth } from "./auth";
+import { getAuthUser, getUserRoom, requireAuth } from "./auth";
 import { handleError } from "../utils/errorHandler";
 
 const createRoomName = (userA: string, userB: string) => {
@@ -13,23 +13,32 @@ export const messageSocket = (io: Server, socket: Socket) => {
     requireAuth(
       handleError(
         async (targetUserId: string, ack?: (result: Object) => void) => {
-        
-          const userId = socket.data.user?.id;
+          const userId = getAuthUser(socket)!.id;
+
           if (!targetUserId) {
             return ack?.({
               status: 400,
               message: "Please provide target user id.",
             });
           }
+
+          if (targetUserId === userId) {
+            return ack?.({
+              status: 400,
+              message: "You cannot open a room with yourself.",
+            });
+          }
+
           const targetUser = await prisma.user.findUnique({
             where: { id: targetUserId },
           });
-          if(!targetUser) {
+          if (!targetUser) {
             return ack?.({
               status: 404,
               message: "Target user not found.",
             });
           }
+
           const roomName = createRoomName(userId, targetUserId);
 
           const existingRoom = await prisma.room.findUnique({
@@ -40,6 +49,9 @@ export const messageSocket = (io: Server, socket: Socket) => {
 
           if (existingRoom) {
             socket.join(existingRoom.id);
+            io.to(getUserRoom(targetUserId)).emit("room:new", {
+              roomId: existingRoom.id,
+            });
             return ack?.({
               status: 200,
               message: "Room already exists.",
@@ -47,17 +59,42 @@ export const messageSocket = (io: Server, socket: Socket) => {
             });
           }
 
-          const newRoom = await prisma.room.create({
-            data: {
-              name: roomName,
-              createdById: userId,
-              members: {
-                create: [{ userId: userId }, { userId: targetUserId }],
+          let newRoom;
+          try {
+            newRoom = await prisma.room.create({
+              data: {
+                name: roomName,
+                createdById: userId,
+                members: {
+                  create: [{ userId: userId }, { userId: targetUserId }],
+                },
               },
-            },
-          });
+            });
+          } catch (error) {
+            // A concurrent room:open already created the same room (unique name).
+            if ((error as { code?: string }).code === "P2002") {
+              const room = await prisma.room.findUnique({
+                where: { name: roomName },
+              });
+              if (room) {
+                socket.join(room.id);
+                io.to(getUserRoom(targetUserId)).emit("room:new", {
+                  roomId: room.id,
+                });
+                return ack?.({
+                  status: 200,
+                  message: "Room already exists.",
+                  roomId: room.id,
+                });
+              }
+            }
+            throw error;
+          }
 
           socket.join(newRoom.id);
+          io.to(getUserRoom(targetUserId)).emit("room:new", {
+            roomId: newRoom.id,
+          });
 
           return ack?.({
             status: 200,
@@ -72,39 +109,69 @@ export const messageSocket = (io: Server, socket: Socket) => {
   socket.on(
     "message:history",
     requireAuth(
-      handleError(async (roomId: string, ack?: (result: Object) => void) => {
-        const userId = socket.data.user?.id;
-        const room = await prisma.room.findUnique({
-          where: { id: roomId },
-        });
-        if (!room) {
-          return ack?.({ status: 404, message: "Room not found." });
-        }
+      handleError(
+        async (
+          {
+            roomId,
+            cursor,
+            limit,
+          }: { roomId: string; cursor?: string; limit?: number },
+          ack?: (result: Object) => void,
+        ) => {
+          const userId = getAuthUser(socket)!.id;
 
-        const isRoomMember = await prisma.roomMember.findFirst({
-          where: {
-            roomId: roomId,
-            userId: userId,
-          },
-        });
-        if(!isRoomMember) {
-          return ack?.({
-            status: 403,
-            message: "You are not a member of this room.",
+          if (!roomId) {
+            return ack?.({
+              status: 400,
+              message: "Please provide roomId.",
+            });
+          }
+
+          const room = await prisma.room.findUnique({
+            where: { id: roomId },
           });
-        }
+          if (!room) {
+            return ack?.({ status: 404, message: "Room not found." });
+          }
 
-        const messages = await prisma.message.findMany({
-          where: { roomId: roomId },
-          orderBy: { createdAt: "desc" },
-        });
+          const isRoomMember = await prisma.roomMember.findFirst({
+            where: {
+              roomId: roomId,
+              userId: userId,
+            },
+          });
+          if (!isRoomMember) {
+            return ack?.({
+              status: 403,
+              message: "You are not a member of this room.",
+            });
+          }
 
-        return ack?.({
-          status: 200,
-          message: "Messages fetched successfully.",
-          messages,
-        });
-      }),
+          const take = Math.min(Math.max(limit ?? 50, 1), 100);
+
+          const messages = await prisma.message.findMany({
+            where: { roomId: roomId },
+            orderBy: { createdAt: "desc" },
+            take: take + 1,
+            ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+            include: {
+              sender: { select: { id: true, username: true } },
+            },
+          });
+
+          const hasMore = messages.length > take;
+          const page = hasMore ? messages.slice(0, take) : messages;
+          const nextCursor = hasMore ? (page.at(-1)?.id ?? null) : null;
+
+          return ack?.({
+            status: 200,
+            message: "Messages fetched successfully.",
+            messages: page,
+            nextCursor,
+            hasMore,
+          });
+        },
+      ),
     ),
   );
 
@@ -116,13 +183,13 @@ export const messageSocket = (io: Server, socket: Socket) => {
           { roomId, content }: { roomId: string; content: string },
           ack?: (result: Object) => void,
         ) => {
-          if (!roomId || !content) {
+          if (!roomId || typeof content !== "string" || !content.trim()) {
             return ack?.({
               status: 400,
               message: "Please provide roomId and content.",
             });
           }
-          const userId = socket.data.user?.id;
+          const userId = getAuthUser(socket)!.id;
           const isRoomMember = await prisma.roomMember.findFirst({
             where: {
               roomId: roomId,
@@ -139,7 +206,7 @@ export const messageSocket = (io: Server, socket: Socket) => {
           const message = await prisma.message.create({
             data: {
               roomId: roomId,
-              content: content,
+              content: content.trim(),
               senderId: userId,
             },
             include: {
@@ -147,9 +214,10 @@ export const messageSocket = (io: Server, socket: Socket) => {
                 select: {
                   id: true,
                   username: true,
+                },
               },
             },
-          }});
+          });
 
           io.to(roomId).emit("message:new", message);
 
@@ -167,7 +235,15 @@ export const messageSocket = (io: Server, socket: Socket) => {
     "message:delete",
     requireAuth(
       handleError(async (messageId: string, ack?: (result: Object) => void) => {
-        const userId = socket.data.user?.id;
+        const userId = getAuthUser(socket)!.id;
+
+        if (!messageId) {
+          return ack?.({
+            status: 400,
+            message: "Please provide messageId.",
+          });
+        }
+
         const message = await prisma.message.findFirst({
           where: {
             id: messageId,
@@ -199,7 +275,15 @@ export const messageSocket = (io: Server, socket: Socket) => {
     "room:leave",
     requireAuth(
       handleError(async (roomId: string, ack?: (result: Object) => void) => {
-        const userId = socket.data.user?.id;
+        const userId = getAuthUser(socket)!.id;
+
+        if (!roomId) {
+          return ack?.({
+            status: 400,
+            message: "Please provide roomId.",
+          });
+        }
+
         const isRoomMember = await prisma.roomMember.findFirst({
           where: {
             roomId: roomId,
@@ -213,7 +297,7 @@ export const messageSocket = (io: Server, socket: Socket) => {
           });
         }
 
-        await socket.leave(roomId);
+        socket.leave(roomId);
         return ack?.({ status: 200, message: "Left room successfully." });
       }),
     ),
@@ -223,7 +307,15 @@ export const messageSocket = (io: Server, socket: Socket) => {
     "room:delete",
     requireAuth(
       handleError(async (roomId: string, ack?: (result: Object) => void) => {
-        const userId = socket.data.user?.id;
+        const userId = getAuthUser(socket)!.id;
+
+        if (!roomId) {
+          return ack?.({
+            status: 400,
+            message: "Please provide roomId.",
+          });
+        }
+
         const room = await prisma.room.findUnique({
           where: {
             id: roomId,

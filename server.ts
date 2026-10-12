@@ -10,7 +10,11 @@ const startServer = async () => {
     console.log(`Server is running on port ${envConfig.port}`);
   });
 
-  const io = new Server(server);
+  const io = new Server(server, {
+    cors: {
+      origin: envConfig.clientUrl ?? "*",
+    },
+  });
   initializeSocket(io);
 };
 

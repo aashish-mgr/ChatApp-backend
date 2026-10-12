@@ -9,3 +9,9 @@ export const getAuthUser = (socket: Socket): AuthUser | undefined =>
 export const setAuthUser = (socket: Socket, user: AuthUser): void => {
   (socket.data as SocketAuthData).user = user;
 };
+
+/**
+ * Name of a user's personal socket.io room. Every socket belonging to the user
+ * joins it on connect, so they can be reached across all their devices.
+ */
+export const getUserRoom = (userId: string): string => `user:${userId}`;

@@ -1,6 +1,6 @@
 import { Server, Socket } from "socket.io";
 import {authSocket} from "./auth.socket";
-import { attachUser } from "./auth";
+import { attachUser, getAuthUser, getUserRoom } from "./auth";
 import { messageSocket } from "./message.socket";
 
 export const initializeSocket = (io: Server) => {
@@ -12,6 +12,13 @@ export const initializeSocket = (io: Server) => {
   io.on("connection", (socket) => {
     console.log("A user connected");
 
+    // Sockets that connected with a valid handshake token are already
+    // authenticated; put them in their personal room so they can receive
+    // events (e.g. "room:new") across all their devices.
+    const user = getAuthUser(socket);
+    if (user) {
+      socket.join(getUserRoom(user.id));
+    }
 
     authSocket(io, socket);
     messageSocket(io, socket);
