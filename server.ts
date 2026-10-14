@@ -13,6 +13,7 @@ const startServer = async () => {
   const io = new Server(server, {
     cors: {
       origin: envConfig.clientUrl ?? "*",
+      credentials: true,
     },
   });
   initializeSocket(io);
