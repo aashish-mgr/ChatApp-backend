@@ -2,6 +2,7 @@ import type { Server, Socket } from "socket.io";
 import type { AuthUser } from "./auth.types";
 import { getAuthUser, getUserRoom, setAuthUser } from "./socket-user.util";
 import { addUserSocket, removeUserSocket } from "../presence/presence.store";
+import { prisma } from "../../config/prisma";
 
 /**
  * Room every authenticated socket joins, so presence updates only reach
@@ -49,5 +50,32 @@ export const registerAuthenticatedSocket = (
       userId: user.id,
       online: true,
     });
+  }
+};
+
+/**
+ * Joins the socket to every chat room the user is a member of.
+ *
+ * Socket.IO room membership dies with the connection, so without this a
+ * reconnecting client would silently miss `message:new` / `message:deleted`
+ * broadcasts for every room except the one the frontend happens to re-open.
+ * Called after both a token-authenticated connect and a `login`.
+ */
+export const joinUserRooms = async (
+  socket: Socket,
+  userId: string,
+): Promise<void> => {
+  try {
+    const memberships = await prisma.roomMember.findMany({
+      where: { userId },
+      select: { roomId: true },
+    });
+    for (const { roomId } of memberships) {
+      await socket.join(roomId);
+    }
+  } catch (error) {
+    // Never fail the connection over a room-join hiccup; the client can
+    // still re-open rooms explicitly via `room:open`.
+    console.error("joinUserRooms error:", error);
   }
 };

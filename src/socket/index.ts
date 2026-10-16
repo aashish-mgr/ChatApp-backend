@@ -3,6 +3,7 @@ import {
   AUTHENTICATED_ROOM,
   authSocket,
   getAuthUser,
+  joinUserRooms,
   registerAuthenticatedSocket,
 } from "../modules/auth";
 import { attachUser } from "../middleware";
@@ -25,6 +26,8 @@ export const initializeSocket = (io: Server) => {
     const user = getAuthUser(socket);
     if (user) {
       registerAuthenticatedSocket(io, socket, user);
+      // Fire-and-forget: joining must not delay the module wiring below.
+      void joinUserRooms(socket, user.id);
     }
 
     authSocket(io, socket);
