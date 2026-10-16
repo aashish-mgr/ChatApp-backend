@@ -390,10 +390,19 @@ export const messageSocket = (io: Server, socket: Socket) => {
           return ack?.({ status: 404, message: "Room not found." });
         }
 
-        if (room.createdById !== userId) {
+        // Any member may delete the conversation. Checking membership (not
+        // `createdById`) also covers rooms whose creator was deleted, which
+        // would otherwise become undeletable forever.
+        const isRoomMember = await prisma.roomMember.findFirst({
+          where: {
+            roomId: roomId,
+            userId: userId,
+          },
+        });
+        if (!isRoomMember) {
           return ack?.({
             status: 403,
-            message: "You are not the creator of this room.",
+            message: "You are not a member of this room.",
           });
         }
 
