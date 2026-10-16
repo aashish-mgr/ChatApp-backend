@@ -7,6 +7,9 @@ const createRoomName = (userA: string, userB: string) => {
   return [userA, userB].sort().join(":");
 };
 
+/** Keeps parity with the composer's client-side limit (MAX_MESSAGE_LENGTH). */
+const MAX_CONTENT_LENGTH = 4000;
+
 export const messageSocket = (io: Server, socket: Socket) => {
   socket.on(
     "room:open",
@@ -245,6 +248,12 @@ export const messageSocket = (io: Server, socket: Socket) => {
             return ack?.({
               status: 400,
               message: "Please provide roomId and content.",
+            });
+          }
+          if (content.length > MAX_CONTENT_LENGTH) {
+            return ack?.({
+              status: 400,
+              message: `Message content must be at most ${MAX_CONTENT_LENGTH} characters.`,
             });
           }
           const userId = getAuthUser(socket)!.id;
