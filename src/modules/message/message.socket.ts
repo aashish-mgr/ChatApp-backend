@@ -362,6 +362,9 @@ export const messageSocket = (io: Server, socket: Socket) => {
             userId_roomId: { userId, roomId },
           },
         });
+        // Tell every device of the leaver (including this one) to drop the
+        // room; other members keep it and reconcile through room:list.
+        io.to(getUserRoom(userId)).emit("room:deleted", { roomId });
         socket.leave(roomId);
         return ack?.({ status: 200, message: "Left room successfully." });
       }),
