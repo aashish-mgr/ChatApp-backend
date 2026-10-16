@@ -13,8 +13,9 @@ const AUTH_ERROR = { status: 401, message: "Authentication required." };
  *   // ...
  * }));
  *
- * When unauthenticated it calls the client's ack with `{ status: 401 }` (if
- * provided) or emits an `auth_error` event, then skips the handler.
+ * When unauthenticated it always emits `auth_error` (the client clears its
+ * session and returns to the login page) and additionally calls the client's
+ * ack with `{ status: 401 }` when one was provided, then skips the handler.
  */
 export const requireAuth =
   (handler: SocketEventHandler): SocketEventHandler =>
@@ -22,11 +23,10 @@ export const requireAuth =
     const socket = this;
 
     if (!getAuthUser(socket)) {
+      socket.emit("auth_error", AUTH_ERROR);
       const ack = args.at(-1);
       if (typeof ack === "function") {
         ack(AUTH_ERROR);
-      } else {
-        socket.emit("auth_error", AUTH_ERROR);
       }
       return;
     }
