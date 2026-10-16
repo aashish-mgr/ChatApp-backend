@@ -48,6 +48,15 @@ export const messageSocket = (io: Server, socket: Socket) => {
           });
 
           if (existingRoom) {
+            // Rejoin membership if the user had previously left this room,
+            // otherwise history/send would reject them with 403.
+            await prisma.roomMember.upsert({
+              where: {
+                userId_roomId: { userId, roomId: existingRoom.id },
+              },
+              update: {},
+              create: { userId, roomId: existingRoom.id },
+            });
             socket.join(existingRoom.id);
             io.to(getUserRoom(targetUserId)).emit("room:new", {
               roomId: existingRoom.id,
@@ -77,6 +86,13 @@ export const messageSocket = (io: Server, socket: Socket) => {
                 where: { name: roomName },
               });
               if (room) {
+                await prisma.roomMember.upsert({
+                  where: {
+                    userId_roomId: { userId, roomId: room.id },
+                  },
+                  update: {},
+                  create: { userId, roomId: room.id },
+                });
                 socket.join(room.id);
                 io.to(getUserRoom(targetUserId)).emit("room:new", {
                   roomId: room.id,
@@ -339,6 +355,13 @@ export const messageSocket = (io: Server, socket: Socket) => {
           });
         }
 
+        // Persist the leave: without this the user keeps showing the room in
+        // room:list and can still send/read messages after "leaving".
+        await prisma.roomMember.delete({
+          where: {
+            userId_roomId: { userId, roomId },
+          },
+        });
         socket.leave(roomId);
         return ack?.({ status: 200, message: "Left room successfully." });
       }),
