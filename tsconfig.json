@@ -2,8 +2,8 @@
   // Visit https://aka.ms/tsconfig to read more about this file
   "compilerOptions": {
     // File Layout
-    // "rootDir": "./src",
-    // "outDir": "./dist",
+    "rootDir": ".",
+    "outDir": "dist",
 
     // Environment Settings
     // See also https://aka.ms/tsconfig/module
@@ -41,5 +41,9 @@
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
     "skipLibCheck": true,
-  }
+  },
+  // prisma7.config.ts imports `dotenv/config`, which only resolves under
+  // moduleResolution node16/nodenext/bundler; it is loaded by the Prisma CLI,
+  // not by our build, so it is kept out of the app compilation.
+  "exclude": ["node_modules", "dist", "prisma7.config.ts"]
 }
