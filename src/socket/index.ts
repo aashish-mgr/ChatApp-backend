@@ -1,19 +1,14 @@
 import { Server } from "socket.io";
-import { authSocket, getAuthUser, getUserRoom } from "../modules/auth";
+import {
+  AUTHENTICATED_ROOM,
+  authSocket,
+  getAuthUser,
+  registerAuthenticatedSocket,
+} from "../modules/auth";
 import { attachUser } from "../middleware";
 import { messageSocket } from "../modules/message";
 import { userSocket } from "../modules/user";
-import {
-  addUserSocket,
-  presenceSocket,
-  removeUserSocket,
-} from "../modules/presence";
-
-/**
- * Room every authenticated socket joins, so presence updates only reach
- * signed-in clients (not the anonymous sockets used during register/login).
- */
-const AUTHENTICATED_ROOM = "authenticated";
+import { presenceSocket, removeUserSocket } from "../modules/presence";
 
 export const initializeSocket = (io: Server) => {
   // Decode `auth.token` (if present) once per connection and attach the user to
@@ -25,20 +20,11 @@ export const initializeSocket = (io: Server) => {
     console.log("A user connected");
 
     // Sockets that connected with a valid handshake token are already
-    // authenticated; put them in their personal room so they can receive
-    // events (e.g. "room:new") across all their devices.
+    // authenticated; register them for presence and put them in their personal
+    // room so they can receive events (e.g. "room:new") across all devices.
     const user = getAuthUser(socket);
     if (user) {
-      socket.join(getUserRoom(user.id));
-      socket.join(AUTHENTICATED_ROOM);
-
-      // Announce only when the user's first socket connects.
-      if (addUserSocket(user.id, socket.id)) {
-        io.to(AUTHENTICATED_ROOM).emit("presence:update", {
-          userId: user.id,
-          online: true,
-        });
-      }
+      registerAuthenticatedSocket(io, socket, user);
     }
 
     authSocket(io, socket);

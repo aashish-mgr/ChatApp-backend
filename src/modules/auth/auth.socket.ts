@@ -4,7 +4,7 @@ import { prisma } from "../../config/prisma";
 import bcrypt from "bcrypt";
 import jwt, { SignOptions } from "jsonwebtoken";
 import { envConfig } from "../../config/env";
-import { setAuthUser, getUserRoom } from "./socket-user.util";
+import { registerAuthenticatedSocket } from "./authenticated-socket";
 
 interface AuthResponse {
   status: number;
@@ -93,9 +93,10 @@ export const authSocket = (io: Server, socket: Socket) => {
       });
 
       // Authenticate this socket so protected events can run on it right away
-      // (without requiring a reconnect carrying the token).
-      setAuthUser(socket, { id: user.id });
-      socket.join(getUserRoom(user.id));
+      // (without requiring a reconnect carrying the token). Also joins the
+      // presence rooms and broadcasts `presence:update` — without this a fresh
+      // login looked offline to everyone until the socket reconnected.
+      registerAuthenticatedSocket(io, socket, { id: user.id });
 
       return ack({
         status: 200,
