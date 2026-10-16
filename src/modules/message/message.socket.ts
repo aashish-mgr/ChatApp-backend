@@ -145,14 +145,34 @@ export const messageSocket = (io: Server, socket: Socket) => {
           },
         });
 
-        const roomsWithMeta = rooms
-          .map((room) => ({
-            id: room.id,
-            createdAt: room.createdAt,
-            members: room.members.map((member) => member.user),
-            lastMessage: room.messages[0] ?? null,
-          }))
-          .sort((a, b) => {
+        const roomsWithMeta = (
+          await Promise.all(
+            rooms.map(async (room) => {
+              // A message is unread when someone else sent it after our last
+              // visit (or after we joined, if we never opened the room).
+              const self = room.members.find(
+                (member) => member.userId === userId,
+              );
+              const since =
+                self?.lastReadAt ?? self?.joinedAt ?? room.createdAt;
+              const unreadCount = await prisma.message.count({
+                where: {
+                  roomId: room.id,
+                  senderId: { not: userId },
+                  createdAt: { gt: since },
+                },
+              });
+
+              return {
+                id: room.id,
+                createdAt: room.createdAt,
+                members: room.members.map((member) => member.user),
+                lastMessage: room.messages[0] ?? null,
+                unreadCount,
+              };
+            }),
+          )
+        ).sort((a, b) => {
             const aTime = a.lastMessage?.createdAt ?? a.createdAt;
             const bTime = b.lastMessage?.createdAt ?? b.createdAt;
             return bTime.getTime() - aTime.getTime();
@@ -376,6 +396,39 @@ export const messageSocket = (io: Server, socket: Socket) => {
         io.to(getUserRoom(userId)).emit("room:deleted", { roomId });
         socket.leave(roomId);
         return ack?.({ status: 200, message: "Left room successfully." });
+      }),
+    ),
+  );
+
+  socket.on(
+    "room:read",
+    requireAuth(
+      handleError(async (roomId: string, ack?: (result: Object) => void) => {
+        const userId = getAuthUser(socket)!.id;
+
+        if (!roomId) {
+          return ack?.({
+            status: 400,
+            message: "Please provide roomId.",
+          });
+        }
+
+        // updateMany instead of update so a non-member gets a 403 rather than
+        // an exception; it also keeps the timestamp update idempotent.
+        const { count } = await prisma.roomMember.updateMany({
+          where: { roomId, userId },
+          data: { lastReadAt: new Date() },
+        });
+        if (count === 0) {
+          return ack?.({
+            status: 403,
+            message: "You are not a member of this room.",
+          });
+        }
+
+        // Clear the badge on the reader's other devices too.
+        io.to(getUserRoom(userId)).emit("room:read", { roomId });
+        return ack?.({ status: 200, message: "Room marked as read." });
       }),
     ),
   );

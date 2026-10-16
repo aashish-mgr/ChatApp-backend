@@ -48,11 +48,14 @@ model Message {
 }
 
 model RoomMember {
-  userId   String
-  roomId   String
-  joinedAt DateTime @default(now())
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  room     Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId     String
+  roomId     String
+  joinedAt   DateTime  @default(now())
+  /// Last time this member read the room. Unread messages are the ones sent
+  /// by someone else after this instant (falling back to `joinedAt`).
+  lastReadAt DateTime?
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  room       Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
   @@id([userId, roomId])
   @@index([roomId])
