@@ -44,6 +44,7 @@
   },
   // prisma7.config.ts imports `dotenv/config`, which only resolves under
   // moduleResolution node16/nodenext/bundler; it is loaded by the Prisma CLI,
-  // not by our build, so it is kept out of the app compilation.
+  // not by our build, so it is kept out of the app compilation. Test files are
+  // included here so `typecheck` covers them; the build config excludes them.
   "exclude": ["node_modules", "dist", "prisma7.config.ts"]
 }

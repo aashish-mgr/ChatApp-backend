@@ -1,0 +1,7 @@
+{
+  // Build-only config: extends the app tsconfig but keeps test files out of the
+  // emitted `dist/`. `npm run typecheck` still uses tsconfig.json (which
+  // includes them) so the tests are type-checked.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "dist", "prisma7.config.ts", "**/*.test.ts"]
+}

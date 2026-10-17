@@ -6,13 +6,14 @@
   "scripts": {
     "dev": "nodemon server.ts",
     "start": "nodemon server.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "start:prod": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "author": "Aashish Magar",
   "license": "ISC",
@@ -35,6 +36,7 @@
     "nodemon": "^3.1.14",
     "prisma": "^7.10.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
   }
 }

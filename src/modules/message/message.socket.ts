@@ -2,10 +2,7 @@ import { prisma } from "../../config/prisma";
 import { Server, Socket } from "socket.io";
 import { getAuthUser, getUserRoom } from "../auth";
 import { handleError, requireAuth } from "../../middleware";
-
-const createRoomName = (userA: string, userB: string) => {
-  return [userA, userB].sort().join(":");
-};
+import { createRoomName } from "./room-name";
 
 /** Keeps parity with the composer's client-side limit (MAX_MESSAGE_LENGTH). */
 const MAX_CONTENT_LENGTH = 4000;

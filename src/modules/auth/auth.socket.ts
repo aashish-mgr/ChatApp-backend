@@ -8,6 +8,7 @@ import {
   joinUserRooms,
   registerAuthenticatedSocket,
 } from "./authenticated-socket";
+import { validateCredentials } from "./credentials";
 
 interface AuthResponse {
   status: number;
@@ -17,29 +18,6 @@ interface AuthResponse {
 }
 
 type Ack = (response: AuthResponse) => void;
-
-const MIN_USERNAME_LENGTH = 3;
-const MAX_USERNAME_LENGTH = 32;
-const MIN_PASSWORD_LENGTH = 6;
-
-/** Returns an error message for invalid credentials, or null when valid. */
-const validateCredentials = (
-  userData: UserLoginRegister,
-): string | null => {
-  if (!userData?.username || !userData?.password) {
-    return "Please provide username and password.";
-  }
-  if (
-    userData.username.length < MIN_USERNAME_LENGTH ||
-    userData.username.length > MAX_USERNAME_LENGTH
-  ) {
-    return `Username must be ${MIN_USERNAME_LENGTH}-${MAX_USERNAME_LENGTH} characters.`;
-  }
-  if (userData.password.length < MIN_PASSWORD_LENGTH) {
-    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
-  }
-  return null;
-};
 
 export const authSocket = (io: Server, socket: Socket) => {
   socket.on("register", async (userData: UserLoginRegister, ack?: Ack) => {
