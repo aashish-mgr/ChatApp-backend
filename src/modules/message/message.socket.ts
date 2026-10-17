@@ -319,6 +319,65 @@ export const messageSocket = (io: Server, socket: Socket) => {
   );
 
   socket.on(
+    "message:update",
+    requireAuth(
+      handleError(
+        async (
+          { messageId, content }: { messageId: string; content: string },
+          ack?: (result: Object) => void,
+        ) => {
+          if (!messageId || typeof content !== "string" || !content.trim()) {
+            return ack?.({
+              status: 400,
+              message: "Please provide messageId and content.",
+            });
+          }
+          if (content.length > MAX_CONTENT_LENGTH) {
+            return ack?.({
+              status: 400,
+              message: `Message content must be at most ${MAX_CONTENT_LENGTH} characters.`,
+            });
+          }
+
+          const userId = getAuthUser(socket)!.id;
+          const message = await prisma.message.findFirst({
+            where: { id: messageId },
+          });
+          if (!message) {
+            return ack?.({ status: 404, message: "Message not found." });
+          }
+          if (message.senderId !== userId) {
+            return ack?.({
+              status: 403,
+              message: "You are not the sender of this message.",
+            });
+          }
+
+          const updated = await prisma.message.update({
+            where: { id: messageId },
+            data: { content: content.trim(), editedAt: new Date() },
+            include: {
+              sender: {
+                select: {
+                  id: true,
+                  username: true,
+                },
+              },
+            },
+          });
+
+          io.to(message.roomId).emit("message:updated", updated);
+
+          return ack?.({
+            status: 200,
+            message: "Message updated successfully.",
+          });
+        },
+      ),
+    ),
+  );
+
+  socket.on(
     "message:delete",
     requireAuth(
       handleError(async (messageId: string, ack?: (result: Object) => void) => {

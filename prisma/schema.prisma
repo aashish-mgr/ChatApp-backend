@@ -35,10 +35,12 @@ model Room {
 }
 
 model Message {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   content   String
-  createdAt DateTime @default(now())
-  sender    User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  /// Set the first time the sender edits the message; null when never edited.
+  editedAt  DateTime?
+  sender    User      @relation(fields: [senderId], references: [id], onDelete: Cascade)
   senderId  String
   room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
   roomId    String
