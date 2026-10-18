@@ -10,6 +10,7 @@ import { attachUser } from "../middleware";
 import { messageSocket } from "../modules/message";
 import { userSocket } from "../modules/user";
 import { presenceSocket, removeUserSocket } from "../modules/presence";
+import { typingSocket } from "../modules/typing";
 
 export const initializeSocket = (io: Server) => {
   // Decode `auth.token` (if present) once per connection and attach the user to
@@ -34,6 +35,7 @@ export const initializeSocket = (io: Server) => {
     messageSocket(io, socket);
     userSocket(io, socket);
     presenceSocket(io, socket);
+    typingSocket(io, socket);
 
     socket.on("disconnect", () => {
       const disconnected = getAuthUser(socket);
