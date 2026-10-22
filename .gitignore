@@ -148,4 +148,7 @@ vite.config.ts.timestamp-*
 # Turbo Repo
 .turbo
 
+# Uploaded files (see UPLOAD_DIR)
+uploads/
+
 generated/

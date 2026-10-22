@@ -20,6 +20,7 @@ model User {
   messages     Message[]
   rooms        RoomMember[]
   createdRooms Room[]       @relation("RoomCreator")
+  attachments  Attachment[]
 }
 
 model Room {
@@ -30,23 +31,54 @@ model Room {
   createdById String?
   messages    Message[]
   members     RoomMember[]
+  attachments Attachment[]
 
   @@index([createdById])
 }
 
 model Message {
-  id        String    @id @default(uuid())
-  content   String
-  createdAt DateTime  @default(now())
+  id           String      @id @default(uuid())
+  content      String
+  createdAt    DateTime    @default(now())
   /// Set the first time the sender edits the message; null when never edited.
-  editedAt  DateTime?
-  sender    User      @relation(fields: [senderId], references: [id], onDelete: Cascade)
-  senderId  String
-  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  roomId    String
+  editedAt     DateTime?
+  sender       User        @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  senderId     String
+  room         Room        @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomId       String
+  /// Optional file attached to the message. Unique: one attachment belongs to
+  /// at most one message. The attachment row is created by the upload before
+  /// the message exists, so it starts out unlinked.
+  attachmentId String?     @unique
+  attachment   Attachment? @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
 
   @@index([roomId, createdAt])
   @@index([senderId])
+}
+
+/// A file uploaded to a room. Created by `POST /api/attachments` and linked to
+/// a message when that message is sent.
+model Attachment {
+  id         String   @id @default(uuid())
+  /// Name of the file as the uploader sent it (sanitized, never used as a path).
+  filename   String
+  /// Opaque name the file is stored under. Unique, so it is safe to serve.
+  storedName String   @unique
+  mimeType   String
+  /// Size in bytes.
+  size       Int
+  createdAt  DateTime @default(now())
+  uploader   User     @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+  uploaderId String
+  room       Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  roomId     String
+  /// The message this attachment belongs to, once it has been sent.
+  message    Message?
+
+  @@index([roomId])
+  @@index([uploaderId])
+  /// Supports the sweep that removes uploads which were never sent.
+  @@index([createdAt])
 }
 
 model RoomMember {

@@ -3,6 +3,7 @@ import { envConfig } from "./src/config/env";
 import { connectToDatabase, prisma } from "./src/config/prisma";
 import { Server } from "socket.io";
 import { initializeSocket } from "./src/socket";
+import { startAttachmentSweeper } from "./src/modules/attachment";
 
 const startServer = async () => {
   await connectToDatabase();
@@ -19,6 +20,9 @@ const startServer = async () => {
     },
   });
   initializeSocket(io);
+
+  // Removes uploads that were never attached to a message.
+  startAttachmentSweeper();
 
   // Graceful shutdown: stop accepting connections, close Socket.IO, then
   // disconnect Prisma so in-flight queries can finish.

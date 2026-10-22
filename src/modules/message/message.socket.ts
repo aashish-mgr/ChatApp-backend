@@ -3,6 +3,12 @@ import { Server, Socket } from "socket.io";
 import { getAuthUser, getUserRoom } from "../auth";
 import { handleError, requireAuth } from "../../middleware";
 import { createRoomName } from "./room-name";
+import { messageInclude, serializeMessage } from "./message.shape";
+import {
+  collectRoomAttachmentNames,
+  deleteAttachment,
+  deleteStoredFiles,
+} from "../attachment/attachment.service";
 
 /** Keeps parity with the composer's client-side limit (MAX_MESSAGE_LENGTH). */
 const MAX_CONTENT_LENGTH = 4000;
@@ -137,7 +143,7 @@ export const messageSocket = (io: Server, socket: Socket) => {
             messages: {
               orderBy: { createdAt: "desc" },
               take: 1,
-              include: { sender: { select: { id: true, username: true } } },
+              include: messageInclude,
             },
           },
         });
@@ -164,7 +170,9 @@ export const messageSocket = (io: Server, socket: Socket) => {
                 id: room.id,
                 createdAt: room.createdAt,
                 members: room.members.map((member) => member.user),
-                lastMessage: room.messages[0] ?? null,
+                lastMessage: room.messages[0]
+                  ? serializeMessage(room.messages[0])
+                  : null,
                 unreadCount,
               };
             }),
@@ -232,9 +240,7 @@ export const messageSocket = (io: Server, socket: Socket) => {
             orderBy: { createdAt: "desc" },
             take: take + 1,
             ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-            include: {
-              sender: { select: { id: true, username: true } },
-            },
+            include: messageInclude,
           });
 
           const hasMore = messages.length > take;
@@ -244,7 +250,7 @@ export const messageSocket = (io: Server, socket: Socket) => {
           return ack?.({
             status: 200,
             message: "Messages fetched successfully.",
-            messages: page,
+            messages: page.map(serializeMessage),
             nextCursor,
             hasMore,
           });
@@ -258,16 +264,22 @@ export const messageSocket = (io: Server, socket: Socket) => {
     requireAuth(
       handleError(
         async (
-          { roomId, content }: { roomId: string; content: string },
+          {
+            roomId,
+            content,
+            attachmentId,
+          }: { roomId: string; content: string; attachmentId?: string },
           ack?: (result: Object) => void,
         ) => {
-          if (!roomId || typeof content !== "string" || !content.trim()) {
+          const text = typeof content === "string" ? content.trim() : "";
+          // A message needs text, a file, or both.
+          if (!roomId || (!text && !attachmentId)) {
             return ack?.({
               status: 400,
               message: "Please provide roomId and content.",
             });
           }
-          if (content.length > MAX_CONTENT_LENGTH) {
+          if (text.length > MAX_CONTENT_LENGTH) {
             return ack?.({
               status: 400,
               message: `Message content must be at most ${MAX_CONTENT_LENGTH} characters.`,
@@ -287,23 +299,57 @@ export const messageSocket = (io: Server, socket: Socket) => {
             });
           }
 
+          // The file was uploaded before the message was sent, so it is
+          // checked here: it has to belong to this room, to this sender, and
+          // it must not be attached to another message already.
+          if (attachmentId) {
+            const attachment = await prisma.attachment.findUnique({
+              where: { id: attachmentId },
+              select: {
+                id: true,
+                roomId: true,
+                uploaderId: true,
+                message: { select: { id: true } },
+              },
+            });
+
+            if (!attachment) {
+              return ack?.({
+                status: 404,
+                message: "Attachment not found.",
+              });
+            }
+            if (attachment.roomId !== roomId) {
+              return ack?.({
+                status: 400,
+                message: "That attachment does not belong to this conversation.",
+              });
+            }
+            if (attachment.uploaderId !== userId) {
+              return ack?.({
+                status: 403,
+                message: "That attachment was uploaded by someone else.",
+              });
+            }
+            if (attachment.message) {
+              return ack?.({
+                status: 409,
+                message: "That attachment is already part of a message.",
+              });
+            }
+          }
+
           const message = await prisma.message.create({
             data: {
               roomId: roomId,
-              content: content.trim(),
+              content: text,
               senderId: userId,
+              attachmentId: attachmentId ?? null,
             },
-            include: {
-              sender: {
-                select: {
-                  id: true,
-                  username: true,
-                },
-              },
-            },
+            include: messageInclude,
           });
 
-          io.to(roomId).emit("message:new", message);
+          io.to(roomId).emit("message:new", serializeMessage(message));
 
           return ack?.({
             status: 200,
@@ -323,7 +369,7 @@ export const messageSocket = (io: Server, socket: Socket) => {
           { messageId, content }: { messageId: string; content: string },
           ack?: (result: Object) => void,
         ) => {
-          if (!messageId || typeof content !== "string" || !content.trim()) {
+          if (!messageId || typeof content !== "string") {
             return ack?.({
               status: 400,
               message: "Please provide messageId and content.",
@@ -339,6 +385,7 @@ export const messageSocket = (io: Server, socket: Socket) => {
           const userId = getAuthUser(socket)!.id;
           const message = await prisma.message.findFirst({
             where: { id: messageId },
+            select: { id: true, senderId: true, attachmentId: true },
           });
           if (!message) {
             return ack?.({ status: 404, message: "Message not found." });
@@ -350,20 +397,26 @@ export const messageSocket = (io: Server, socket: Socket) => {
             });
           }
 
+          const text = content.trim();
+          // A message that carries a file may also have empty text; a
+          // text-only message may not become empty.
+          if (!text && !message.attachmentId) {
+            return ack?.({
+              status: 400,
+              message: "A message cannot be empty.",
+            });
+          }
+
           const updated = await prisma.message.update({
             where: { id: messageId },
-            data: { content: content.trim(), editedAt: new Date() },
-            include: {
-              sender: {
-                select: {
-                  id: true,
-                  username: true,
-                },
-              },
-            },
+            data: { content: text, editedAt: new Date() },
+            include: messageInclude,
           });
 
-          io.to(message.roomId).emit("message:updated", updated);
+          io.to(updated.roomId).emit(
+            "message:updated",
+            serializeMessage(updated),
+          );
 
           return ack?.({
             status: 200,
@@ -391,6 +444,12 @@ export const messageSocket = (io: Server, socket: Socket) => {
           where: {
             id: messageId,
           },
+          select: {
+            id: true,
+            senderId: true,
+            roomId: true,
+            attachmentId: true,
+          },
         });
         if (!message) {
           return ack?.({ status: 404, message: "Message not found." });
@@ -408,6 +467,10 @@ export const messageSocket = (io: Server, socket: Socket) => {
             id: messageId,
           },
         });
+        // The file outlives the message row unless it is removed with it.
+        if (message.attachmentId) {
+          await deleteAttachment(message.attachmentId);
+        }
         io.to(message.roomId).emit("message:deleted", { messageId });
         return ack?.({ status: 200, message: "Message deleted successfully." });
       }),
@@ -527,11 +590,16 @@ export const messageSocket = (io: Server, socket: Socket) => {
           });
         }
 
+        // Collect the file names first: deleting the room cascades the
+        // attachment rows away, so they are gone afterwards.
+        const storedNames = await collectRoomAttachmentNames(roomId);
+
         await prisma.room.delete({
           where: {
             id: roomId,
           },
         });
+        await deleteStoredFiles(storedNames);
         io.to(roomId).emit("room:deleted", { roomId });
         io.socketsLeave(roomId); // Make all sockets leave the room
         return ack?.({ status: 200, message: "Room deleted successfully." });
