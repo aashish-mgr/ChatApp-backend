@@ -25,7 +25,8 @@ model User {
 
 model Room {
   id          String       @id @default(uuid())
-  name        String       @unique
+  name        String
+  isGroup     Boolean      @default(false)
   createdAt   DateTime     @default(now())
   createdBy   User?        @relation("RoomCreator", fields: [createdById], references: [id], onDelete: SetNull)
   createdById String?
@@ -88,6 +89,8 @@ model RoomMember {
   /// Last time this member read the room. Unread messages are the ones sent
   /// by someone else after this instant (falling back to `joinedAt`).
   lastReadAt DateTime?
+  /// Role of the member in a group chat (e.g. admin). Defaults to member.
+  role       String    @default("member")
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   room       Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
 

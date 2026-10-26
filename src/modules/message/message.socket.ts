@@ -47,9 +47,10 @@ export const messageSocket = (io: Server, socket: Socket) => {
 
           const roomName = createRoomName(userId, targetUserId);
 
-          const existingRoom = await prisma.room.findUnique({
+          const existingRoom = await prisma.room.findFirst({
             where: {
               name: roomName,
+              isGroup: false,
             },
           });
 
@@ -88,8 +89,8 @@ export const messageSocket = (io: Server, socket: Socket) => {
           } catch (error) {
             // A concurrent room:open already created the same room (unique name).
             if ((error as { code?: string }).code === "P2002") {
-              const room = await prisma.room.findUnique({
-                where: { name: roomName },
+              const room = await prisma.room.findFirst({
+                where: { name: roomName, isGroup: false },
               });
               if (room) {
                 await prisma.roomMember.upsert({
