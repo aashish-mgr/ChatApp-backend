@@ -3,6 +3,12 @@ import { Server, Socket } from "socket.io";
 import { getAuthUser, getUserRoom } from "../auth";
 import { handleError, requireAuth } from "../../middleware";
 import { createRoomName } from "./room-name";
+import {
+  GROUP_ADMIN_ROLE,
+  GROUP_MEMBER_ROLE,
+  isGroupAdmin,
+  resolveGroupMemberIds,
+} from "./group";
 import { messageInclude, serializeMessage } from "./message.shape";
 import {
   collectRoomAttachmentNames,
@@ -12,6 +18,29 @@ import {
 
 /** Keeps parity with the composer's client-side limit (MAX_MESSAGE_LENGTH). */
 const MAX_CONTENT_LENGTH = 4000;
+
+/**
+ * Keeps a group manageable: when its last admin leaves or is removed, the
+ * longest-standing remaining member is promoted.
+ */
+const promoteNextAdmin = async (roomId: string) => {
+  const admins = await prisma.roomMember.count({
+    where: { roomId, role: GROUP_ADMIN_ROLE },
+  });
+  if (admins > 0) return;
+
+  const next = await prisma.roomMember.findFirst({
+    where: { roomId },
+    orderBy: { joinedAt: "asc" },
+    select: { userId: true },
+  });
+  if (!next) return;
+
+  await prisma.roomMember.update({
+    where: { userId_roomId: { userId: next.userId, roomId } },
+    data: { role: GROUP_ADMIN_ROLE },
+  });
+};
 
 export const messageSocket = (io: Server, socket: Socket) => {
   socket.on(
@@ -168,7 +197,9 @@ export const messageSocket = (io: Server, socket: Socket) => {
 
               return {
                 id: room.id,
-                name: room.name,
+                // Direct rooms use the deterministic id pair as an internal
+                // name; the client shows the peer's username instead.
+                name: room.isGroup ? room.name : null,
                 isGroup: room.isGroup,
                 createdAt: room.createdAt,
                 members: room.members.map((member) => ({
@@ -506,6 +537,10 @@ export const messageSocket = (io: Server, socket: Socket) => {
             userId_roomId: { userId, roomId },
           },
         });
+        // Leaving the last admin behind would make the group unmanageable.
+        if (isGroupAdmin(isRoomMember.role)) {
+          await promoteNextAdmin(roomId);
+        }
         io.to(getUserRoom(userId)).emit("room:deleted", { roomId });
         socket.leave(roomId);
         return ack?.({ status: 200, message: "Left room successfully." });
@@ -578,6 +613,15 @@ export const messageSocket = (io: Server, socket: Socket) => {
           });
         }
 
+        // A direct conversation belongs to both people, but a group is shared
+        // by many: only an admin may delete it for everyone.
+        if (room.isGroup && !isGroupAdmin(isRoomMember.role)) {
+          return ack?.({
+            status: 403,
+            message: "Only admins can delete the group.",
+          });
+        }
+
         const storedNames = await collectRoomAttachmentNames(roomId);
 
         await prisma.room.delete({
@@ -620,9 +664,7 @@ export const messageSocket = (io: Server, socket: Socket) => {
             });
           }
 
-          const uniqueMembers = Array.from(
-            new Set([...memberIds.filter((id) => id && id !== userId), userId]),
-          );
+          const uniqueMembers = resolveGroupMemberIds(userId, memberIds);
 
           if (uniqueMembers.length < 2) {
             return ack?.({
@@ -651,19 +693,18 @@ export const messageSocket = (io: Server, socket: Socket) => {
               members: {
                 create: uniqueMembers.map((id) => ({
                   userId: id,
-                  roomId: undefined as any, // not needed
-                  role: id === userId ? "admin" : "member",
+                  role: id === userId ? GROUP_ADMIN_ROLE : GROUP_MEMBER_ROLE,
                 })),
               },
-            } as any,
+            },
           });
 
           for (const id of uniqueMembers) {
+            io.in(getUserRoom(id)).socketsJoin(group.id);
             if (id !== userId) {
               io.to(getUserRoom(id)).emit("room:new", { roomId: group.id });
             }
           }
-          socket.join(group.id);
 
           return ack?.({
             status: 200,
@@ -710,10 +751,16 @@ export const messageSocket = (io: Server, socket: Socket) => {
           ]);
 
           if (!actor) {
-            return ack?.({ status: 403, message: "You are not a member of this room." });
+            return ack?.({
+              status: 403,
+              message: "You are not a member of this room.",
+            });
           }
-          if (actor.role !== "admin") {
-            return ack?.({ status: 403, message: "Only admins can add members." });
+          if (!isGroupAdmin(actor.role)) {
+            return ack?.({
+              status: 403,
+              message: "Only admins can add members.",
+            });
           }
           if (!target) {
             return ack?.({ status: 404, message: "Target user not found." });
@@ -723,10 +770,16 @@ export const messageSocket = (io: Server, socket: Socket) => {
           }
 
           await prisma.roomMember.create({
-            data: { userId: targetUserId, roomId, role: "member" },
+            data: { userId: targetUserId, roomId, role: GROUP_MEMBER_ROLE },
           });
+          // Their live sockets join the channel right away, so new messages
+          // arrive without waiting for a reconnect.
+          io.in(getUserRoom(targetUserId)).socketsJoin(roomId);
           io.to(getUserRoom(targetUserId)).emit("room:new", { roomId });
-          io.to(roomId).emit("room:memberAdded", { roomId, userId: targetUserId });
+          io.to(roomId).emit("room:memberAdded", {
+            roomId,
+            userId: targetUserId,
+          });
 
           return ack?.({ status: 200, message: "Member added successfully." });
         },
@@ -768,20 +821,34 @@ export const messageSocket = (io: Server, socket: Socket) => {
           ]);
 
           if (!actor) {
-            return ack?.({ status: 403, message: "You are not a member of this room." });
+            return ack?.({
+              status: 403,
+              message: "You are not a member of this room.",
+            });
           }
           if (!targetMember) {
             return ack?.({ status: 404, message: "User not in the group." });
           }
-          if (actor.role !== "admin" && actorId !== targetUserId) {
+          // Admins may remove anyone; everyone may remove themselves.
+          if (!isGroupAdmin(actor.role) && actorId !== targetUserId) {
             return ack?.({ status: 403, message: "Not authorized." });
           }
 
           await prisma.roomMember.delete({
             where: { userId_roomId: { userId: targetUserId, roomId } },
           });
+          if (isGroupAdmin(targetMember.role)) {
+            await promoteNextAdmin(roomId);
+          }
+          // Removed members lose the channel on every device immediately.
+          io.in(getUserRoom(targetUserId)).socketsLeave(roomId);
           io.to(getUserRoom(targetUserId)).emit("room:deleted", { roomId });
-          io.to(roomId).emit("room:memberRemoved", { roomId, userId: targetUserId });
+          if (actorId !== targetUserId) {
+            io.to(roomId).emit("room:memberRemoved", {
+              roomId,
+              userId: targetUserId,
+            });
+          }
 
           return ack?.({ status: 200, message: "Member removed successfully." });
         },
