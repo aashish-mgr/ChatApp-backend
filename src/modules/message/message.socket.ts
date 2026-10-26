@@ -19,6 +19,12 @@ import {
 /** Keeps parity with the composer's client-side limit (MAX_MESSAGE_LENGTH). */
 const MAX_CONTENT_LENGTH = 4000;
 
+/** Room for a sensible label without letting names grow unbounded. */
+const MAX_GROUP_NAME_LENGTH = 100;
+
+/** Keeps member lists and room:list payloads bounded. */
+const MAX_GROUP_MEMBERS = 100;
+
 /**
  * Keeps a group manageable: when its last admin leaves or is removed, the
  * longest-standing remaining member is promoted.
@@ -519,12 +525,18 @@ export const messageSocket = (io: Server, socket: Socket) => {
           });
         }
 
-        const isRoomMember = await prisma.roomMember.findFirst({
-          where: {
-            roomId: roomId,
-            userId: userId,
-          },
-        });
+        const [isRoomMember, room] = await Promise.all([
+          prisma.roomMember.findFirst({
+            where: {
+              roomId: roomId,
+              userId: userId,
+            },
+          }),
+          prisma.room.findUnique({
+            where: { id: roomId },
+            select: { isGroup: true },
+          }),
+        ]);
         if (!isRoomMember) {
           return ack?.({
             status: 403,
@@ -542,6 +554,11 @@ export const messageSocket = (io: Server, socket: Socket) => {
           await promoteNextAdmin(roomId);
         }
         io.to(getUserRoom(userId)).emit("room:deleted", { roomId });
+        // Remaining members refresh the member list (and are re-checked for
+        // admin promotion); direct rooms have no visible member list.
+        if (room?.isGroup) {
+          io.to(roomId).emit("room:memberRemoved", { roomId, userId });
+        }
         socket.leave(roomId);
         return ack?.({ status: 200, message: "Left room successfully." });
       }),
@@ -656,6 +673,12 @@ export const messageSocket = (io: Server, socket: Socket) => {
               message: "Please provide a group name.",
             });
           }
+          if (name.trim().length > MAX_GROUP_NAME_LENGTH) {
+            return ack?.({
+              status: 400,
+              message: `Group names must be at most ${MAX_GROUP_NAME_LENGTH} characters.`,
+            });
+          }
 
           if (!Array.isArray(memberIds)) {
             return ack?.({
@@ -670,6 +693,12 @@ export const messageSocket = (io: Server, socket: Socket) => {
             return ack?.({
               status: 400,
               message: "A group needs at least one other member.",
+            });
+          }
+          if (uniqueMembers.length > MAX_GROUP_MEMBERS) {
+            return ack?.({
+              status: 400,
+              message: `A group may have at most ${MAX_GROUP_MEMBERS} members.`,
             });
           }
 
@@ -767,6 +796,15 @@ export const messageSocket = (io: Server, socket: Socket) => {
           }
           if (existing) {
             return ack?.({ status: 409, message: "User already in the group." });
+          }
+          const memberCount = await prisma.roomMember.count({
+            where: { roomId },
+          });
+          if (memberCount >= MAX_GROUP_MEMBERS) {
+            return ack?.({
+              status: 400,
+              message: `A group may have at most ${MAX_GROUP_MEMBERS} members.`,
+            });
           }
 
           await prisma.roomMember.create({
