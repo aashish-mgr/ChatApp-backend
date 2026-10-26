@@ -55,8 +55,6 @@ export const messageSocket = (io: Server, socket: Socket) => {
           });
 
           if (existingRoom) {
-            // Rejoin membership if the user had previously left this room,
-            // otherwise history/send would reject them with 403.
             await prisma.roomMember.upsert({
               where: {
                 userId_roomId: { userId, roomId: existingRoom.id },
@@ -80,14 +78,17 @@ export const messageSocket = (io: Server, socket: Socket) => {
             newRoom = await prisma.room.create({
               data: {
                 name: roomName,
+                isGroup: false,
                 createdById: userId,
                 members: {
-                  create: [{ userId: userId }, { userId: targetUserId }],
+                  create: [
+                    { userId: userId, role: "admin" },
+                    { userId: targetUserId, role: "member" },
+                  ],
                 },
               },
             });
           } catch (error) {
-            // A concurrent room:open already created the same room (unique name).
             if ((error as { code?: string }).code === "P2002") {
               const room = await prisma.room.findFirst({
                 where: { name: roomName, isGroup: false },
@@ -152,8 +153,6 @@ export const messageSocket = (io: Server, socket: Socket) => {
         const roomsWithMeta = (
           await Promise.all(
             rooms.map(async (room) => {
-              // A message is unread when someone else sent it after our last
-              // visit (or after we joined, if we never opened the room).
               const self = room.members.find(
                 (member) => member.userId === userId,
               );
@@ -169,6 +168,8 @@ export const messageSocket = (io: Server, socket: Socket) => {
 
               return {
                 id: room.id,
+                name: room.name,
+                isGroup: room.isGroup,
                 createdAt: room.createdAt,
                 members: room.members.map((member) => member.user),
                 lastMessage: room.messages[0]
@@ -179,10 +180,10 @@ export const messageSocket = (io: Server, socket: Socket) => {
             }),
           )
         ).sort((a, b) => {
-            const aTime = a.lastMessage?.createdAt ?? a.createdAt;
-            const bTime = b.lastMessage?.createdAt ?? b.createdAt;
-            return bTime.getTime() - aTime.getTime();
-          });
+          const aTime = a.lastMessage?.createdAt ?? a.createdAt;
+          const bTime = b.lastMessage?.createdAt ?? b.createdAt;
+          return bTime.getTime() - aTime.getTime();
+        });
 
         return ack?.({
           status: 200,
@@ -273,7 +274,6 @@ export const messageSocket = (io: Server, socket: Socket) => {
           ack?: (result: Object) => void,
         ) => {
           const text = typeof content === "string" ? content.trim() : "";
-          // A message needs text, a file, or both.
           if (!roomId || (!text && !attachmentId)) {
             return ack?.({
               status: 400,
@@ -300,9 +300,6 @@ export const messageSocket = (io: Server, socket: Socket) => {
             });
           }
 
-          // The file was uploaded before the message was sent, so it is
-          // checked here: it has to belong to this room, to this sender, and
-          // it must not be attached to another message already.
           if (attachmentId) {
             const attachment = await prisma.attachment.findUnique({
               where: { id: attachmentId },
@@ -399,8 +396,6 @@ export const messageSocket = (io: Server, socket: Socket) => {
           }
 
           const text = content.trim();
-          // A message that carries a file may also have empty text; a
-          // text-only message may not become empty.
           if (!text && !message.attachmentId) {
             return ack?.({
               status: 400,
@@ -468,7 +463,6 @@ export const messageSocket = (io: Server, socket: Socket) => {
             id: messageId,
           },
         });
-        // The file outlives the message row unless it is removed with it.
         if (message.attachmentId) {
           await deleteAttachment(message.attachmentId);
         }
@@ -504,15 +498,11 @@ export const messageSocket = (io: Server, socket: Socket) => {
           });
         }
 
-        // Persist the leave: without this the user keeps showing the room in
-        // room:list and can still send/read messages after "leaving".
         await prisma.roomMember.delete({
           where: {
             userId_roomId: { userId, roomId },
           },
         });
-        // Tell every device of the leaver (including this one) to drop the
-        // room; other members keep it and reconcile through room:list.
         io.to(getUserRoom(userId)).emit("room:deleted", { roomId });
         socket.leave(roomId);
         return ack?.({ status: 200, message: "Left room successfully." });
@@ -533,8 +523,6 @@ export const messageSocket = (io: Server, socket: Socket) => {
           });
         }
 
-        // updateMany instead of update so a non-member gets a 403 rather than
-        // an exception; it also keeps the timestamp update idempotent.
         const { count } = await prisma.roomMember.updateMany({
           where: { roomId, userId },
           data: { lastReadAt: new Date() },
@@ -546,7 +534,6 @@ export const messageSocket = (io: Server, socket: Socket) => {
           });
         }
 
-        // Clear the badge on the reader's other devices too.
         io.to(getUserRoom(userId)).emit("room:read", { roomId });
         return ack?.({ status: 200, message: "Room marked as read." });
       }),
@@ -575,9 +562,6 @@ export const messageSocket = (io: Server, socket: Socket) => {
           return ack?.({ status: 404, message: "Room not found." });
         }
 
-        // Any member may delete the conversation. Checking membership (not
-        // `createdById`) also covers rooms whose creator was deleted, which
-        // would otherwise become undeletable forever.
         const isRoomMember = await prisma.roomMember.findFirst({
           where: {
             roomId: roomId,
@@ -591,8 +575,6 @@ export const messageSocket = (io: Server, socket: Socket) => {
           });
         }
 
-        // Collect the file names first: deleting the room cascades the
-        // attachment rows away, so they are gone afterwards.
         const storedNames = await collectRoomAttachmentNames(roomId);
 
         await prisma.room.delete({
@@ -602,9 +584,205 @@ export const messageSocket = (io: Server, socket: Socket) => {
         });
         await deleteStoredFiles(storedNames);
         io.to(roomId).emit("room:deleted", { roomId });
-        io.socketsLeave(roomId); // Make all sockets leave the room
+        io.socketsLeave(roomId);
         return ack?.({ status: 200, message: "Room deleted successfully." });
       }),
+    ),
+  );
+
+  socket.on(
+    "room:createGroup",
+    requireAuth(
+      handleError(
+        async (
+          {
+            name,
+            memberIds,
+          }: { name?: string; memberIds?: string[] },
+          ack?: (result: Object) => void,
+        ) => {
+          const userId = getAuthUser(socket)!.id;
+
+          if (!name || typeof name !== "string" || !name.trim()) {
+            return ack?.({
+              status: 400,
+              message: "Please provide a group name.",
+            });
+          }
+
+          if (!Array.isArray(memberIds)) {
+            return ack?.({
+              status: 400,
+              message: "Please provide member ids.",
+            });
+          }
+
+          const uniqueMembers = Array.from(
+            new Set([...memberIds.filter((id) => id && id !== userId), userId]),
+          );
+
+          if (uniqueMembers.length < 2) {
+            return ack?.({
+              status: 400,
+              message: "A group needs at least one other member.",
+            });
+          }
+
+          const users = await prisma.user.findMany({
+            where: { id: { in: uniqueMembers } },
+            select: { id: true },
+          });
+          const found = new Set(users.map((u) => u.id));
+          if (uniqueMembers.some((id) => !found.has(id))) {
+            return ack?.({
+              status: 404,
+              message: "One or more users not found.",
+            });
+          }
+
+          const group = await prisma.room.create({
+            data: {
+              name: name.trim(),
+              isGroup: true,
+              createdById: userId,
+              members: {
+                create: uniqueMembers.map((id) => ({
+                  userId: id,
+                  roomId: undefined as any, // not needed
+                  role: id === userId ? "admin" : "member",
+                })),
+              },
+            } as any,
+          });
+
+          for (const id of uniqueMembers) {
+            if (id !== userId) {
+              io.to(getUserRoom(id)).emit("room:new", { roomId: group.id });
+            }
+          }
+          socket.join(group.id);
+
+          return ack?.({
+            status: 200,
+            message: "Group created successfully.",
+            roomId: group.id,
+          });
+        },
+      ),
+    ),
+  );
+
+  socket.on(
+    "room:addMember",
+    requireAuth(
+      handleError(
+        async (
+          { roomId, userId: targetUserId }: { roomId: string; userId: string },
+          ack?: (result: Object) => void,
+        ) => {
+          const actorId = getAuthUser(socket)!.id;
+          if (!roomId || !targetUserId) {
+            return ack?.({
+              status: 400,
+              message: "Please provide roomId and userId.",
+            });
+          }
+
+          const room = await prisma.room.findUnique({ where: { id: roomId } });
+          if (!room || !room.isGroup) {
+            return ack?.({
+              status: 400,
+              message: "This action is only available for groups.",
+            });
+          }
+
+          const [actor, target, existing] = await Promise.all([
+            prisma.roomMember.findUnique({
+              where: { userId_roomId: { userId: actorId, roomId } },
+            }),
+            prisma.user.findUnique({ where: { id: targetUserId } }),
+            prisma.roomMember.findUnique({
+              where: { userId_roomId: { userId: targetUserId, roomId } },
+            }),
+          ]);
+
+          if (!actor) {
+            return ack?.({ status: 403, message: "You are not a member of this room." });
+          }
+          if (actor.role !== "admin") {
+            return ack?.({ status: 403, message: "Only admins can add members." });
+          }
+          if (!target) {
+            return ack?.({ status: 404, message: "Target user not found." });
+          }
+          if (existing) {
+            return ack?.({ status: 409, message: "User already in the group." });
+          }
+
+          await prisma.roomMember.create({
+            data: { userId: targetUserId, roomId, role: "member" },
+          });
+          io.to(getUserRoom(targetUserId)).emit("room:new", { roomId });
+          io.to(roomId).emit("room:memberAdded", { roomId, userId: targetUserId });
+
+          return ack?.({ status: 200, message: "Member added successfully." });
+        },
+      ),
+    ),
+  );
+
+  socket.on(
+    "room:removeMember",
+    requireAuth(
+      handleError(
+        async (
+          { roomId, userId: targetUserId }: { roomId: string; userId: string },
+          ack?: (result: Object) => void,
+        ) => {
+          const actorId = getAuthUser(socket)!.id;
+          if (!roomId || !targetUserId) {
+            return ack?.({
+              status: 400,
+              message: "Please provide roomId and userId.",
+            });
+          }
+
+          const room = await prisma.room.findUnique({ where: { id: roomId } });
+          if (!room || !room.isGroup) {
+            return ack?.({
+              status: 400,
+              message: "This action is only available for groups.",
+            });
+          }
+
+          const [actor, targetMember] = await Promise.all([
+            prisma.roomMember.findUnique({
+              where: { userId_roomId: { userId: actorId, roomId } },
+            }),
+            prisma.roomMember.findUnique({
+              where: { userId_roomId: { userId: targetUserId, roomId } },
+            }),
+          ]);
+
+          if (!actor) {
+            return ack?.({ status: 403, message: "You are not a member of this room." });
+          }
+          if (!targetMember) {
+            return ack?.({ status: 404, message: "User not in the group." });
+          }
+          if (actor.role !== "admin" && actorId !== targetUserId) {
+            return ack?.({ status: 403, message: "Not authorized." });
+          }
+
+          await prisma.roomMember.delete({
+            where: { userId_roomId: { userId: targetUserId, roomId } },
+          });
+          io.to(getUserRoom(targetUserId)).emit("room:deleted", { roomId });
+          io.to(roomId).emit("room:memberRemoved", { roomId, userId: targetUserId });
+
+          return ack?.({ status: 200, message: "Member removed successfully." });
+        },
+      ),
     ),
   );
 };
