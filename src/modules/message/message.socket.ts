@@ -171,7 +171,10 @@ export const messageSocket = (io: Server, socket: Socket) => {
                 name: room.name,
                 isGroup: room.isGroup,
                 createdAt: room.createdAt,
-                members: room.members.map((member) => member.user),
+                members: room.members.map((member) => ({
+                  ...member.user,
+                  role: member.role,
+                })),
                 lastMessage: room.messages[0]
                   ? serializeMessage(room.messages[0])
                   : null,
