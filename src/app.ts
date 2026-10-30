@@ -16,6 +16,15 @@ app.use(
 
 app.use(express.json());
 
+// Health check endpoint for load balancers/orchestrators
+app.get("/health", (_req, res) => {
+  res.status(200).json({ status: "ok", uptime: process.uptime() });
+});
+
+app.get("/", (_req, res) => {
+  res.status(200).json({ status: "ok", service: "chat_backend" });
+});
+
 // The first non-socket surface of the app: file uploads travel over HTTP.
 app.use("/api/attachments", attachmentRouter);
 
